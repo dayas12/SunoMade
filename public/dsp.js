@@ -1,5 +1,5 @@
 // Browser reconstruction of the recovered desktop DSP chain.
-import {SoundTouch, SimpleFilter} from './vendor/soundtouchjs/soundtouch.js';
+
 export const SR=44100;
 export const defaults={pitch_cents:42,tempo_factor:1.02,deresonance:.85,punch:.75,room_ir:.16,dispersion:.95,flutter:.55,air:.7,analog:.7,room_db:-58,mono_bass:'140 Hz',lufs:-11.5,output_format:'wav24'};
 export const ranges={pitch_cents:[-100,100],tempo_factor:[.8,1.2],deresonance:[0,1],punch:[0,1],room_ir:[0,.4],dispersion:[0,1],flutter:[0,1],air:[0,1],analog:[0,1],room_db:[-90,-35],lufs:[-24,-8]};
@@ -86,15 +86,6 @@ export function air(channels,amount,sr){
 export function ambiance(channels,db,sr,random){
   return channels.map(x=>{const noise=Float32Array.from(x,()=>gaussian(random));const shaped=filter(filter(noise,biquad('high',85,Math.SQRT1_2,0,sr)),biquad('low',10500,Math.SQRT1_2,0,sr));const gain=10**(db/20);return x.map((v,i)=>v+(random()+random()-1)*7.943282347242822e-5+shaped[i]*gain);});
 }
-export function pitchTempo(channels,cents,tempo){
-  if(Math.abs(cents)<.001&&Math.abs(tempo-1)<.00001)return channels;
-  const engine=new SoundTouch();engine.pitch=2**(cents/1200);engine.tempo=tempo;
-  const source={extract(target,frames,position){const n=Math.min(frames,Math.max(0,channels[0].length+16384-position));for(let i=0;i<n;i++){target[2*i]=channels[0][position+i]||0;target[2*i+1]=channels[1][position+i]||0;}return n;}};
-  const f=new SimpleFilter(source,engine),length=Math.round(channels[0].length/tempo),out=[new Float32Array(length),new Float32Array(length)],block=new Float32Array(8192);let position=0;
-  while(position<length){const n=f.extract(block,Math.min(4096,length-position));if(!n)break;for(let i=0;i<n;i++){out[0][position+i]=block[2*i];out[1][position+i]=block[2*i+1];}position+=n;}
-  if(position<length)throw new Error('Perubahan pitch/tempo berhenti sebelum audio selesai.');
-  return out;
-}
 // BS.1770-style K weighting, 400 ms windows, 100 ms hops, absolute/relative gating.
 export function loudness(channels,sr=SR){
   const weighted=channels.map(x=>filter(filter(x,biquad('shelf',1500,1/Math.sqrt(2),4,sr)),biquad('high',38,.5,0,sr)));
@@ -120,7 +111,7 @@ export function master(channels,target,sr){
 export async function processAudio(channels,settings,progress=()=>{}){
   const s=validateSettings(settings),random=rng();if(channels.length!==2||!channels[0].length||channels[0].length!==channels[1].length)throw new Error('Audio stereo tidak valid.');
   let audio=channels;
-  const stages=[['Multiband & tekstur analog',x=>multiband(x,s,SR)],['Dinamika transient',x=>punch(x,s.punch,SR)],['Ruang studio',x=>room(x,s.room_ir,SR,random)],['Dispersi fase',x=>dispersion(x,s.dispersion,SR,random)],['Micro flutter',x=>flutter(x,s.flutter,SR)],['Harmonic air',x=>air(x,s.air,SR)],['Ambiance & dither',x=>ambiance(x,s.room_db,SR,random)],['Pitch & tempo',x=>pitchTempo(x,s.pitch_cents,s.tempo_factor)],['Filter akhir',x=>x.map(c=>filter(filter(c,biquad('high',28,Math.SQRT1_2,0,SR)),biquad('low',19500,Math.SQRT1_2,0,SR)))],['Loudness & peak',x=>master(x,s.lufs,SR)]];
+  const stages=[['Multiband & tekstur analog',x=>multiband(x,s,SR)],['Dinamika transient',x=>punch(x,s.punch,SR)],['Ruang studio',x=>room(x,s.room_ir,SR,random)],['Dispersi fase',x=>dispersion(x,s.dispersion,SR,random)],['Micro flutter',x=>flutter(x,s.flutter,SR)],['Harmonic air',x=>air(x,s.air,SR)],['Ambiance & dither',x=>ambiance(x,s.room_db,SR,random)],['Loudness & peak',x=>master(x,s.lufs,SR)]];
   for(let i=0;i<stages.length;i++){progress(i/stages.length,stages[i][0]);audio=stages[i][1](audio);await new Promise(r=>setTimeout(r,0));}
   for(const x of audio)for(const v of x)if(!Number.isFinite(v))throw new Error('DSP menghasilkan nilai audio tidak valid.');
   progress(1,'Audio selesai');return {channels:audio,stats:{lufs:loudness(audio,SR),peakDb:20*Math.log10(truePeak(audio)||1e-12),duration:audio[0].length/SR}};
